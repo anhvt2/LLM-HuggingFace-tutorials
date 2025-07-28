@@ -1,0 +1,3 @@
+[submodule "langchain-tutorials"]
+	path = langchain-tutorials
+	url = https://github.com/gkamradt/langchain-tutorials/
