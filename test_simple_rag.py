@@ -4,6 +4,8 @@
 * Generation step: Hugging Face LLM produces grounded response.
 
 Improvement options: swap FAISS for Pinecone/Weaviate, use transformers.RagTokenizer and RagTokenForGeneration for full integration, or fine-tune retriever.
+
+User Question → Embed Query → Vector DB Search → Retrieve Top-k Docs → Context = Combine Docs + Query → Prompt LLM → Generate Grounded Answer
 """
 
 
