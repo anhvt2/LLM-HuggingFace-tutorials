@@ -1,6 +1,7 @@
 # pip install langchain langchain-community langchain-text-splitters faiss-cpu transformers sentence-transformers
 
-from langchain_community.embeddings import HuggingFaceEmbeddings
+# from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.docstore.in_memory import InMemoryDocstore
 from langchain_core.documents import Document
@@ -65,3 +66,97 @@ def rag_answer(question: str) -> str:
     return llm.invoke(prompt)
 
 print(rag_answer("What benefits are included in Manulife Vitality?"))
+
+# --------------------------------------------------------------------------------
+# pip install langgraph
+
+from typing import List, TypedDict, Optional
+from langchain_core.documents import Document
+from langgraph.graph import StateGraph, END
+
+# Reuse `retriever` and `llm` from above.
+
+class RAGState(TypedDict):
+    question: str
+    query: str                # current working query (may be rewritten)
+    docs: List[Document]
+    answer: Optional[str]
+    needs_more: bool
+    iter: int
+
+def rewrite_query(state: RAGState) -> RAGState:
+    # Lightweight rewrite to improve recall
+    prompt = (
+        "Rewrite the user question to improve document recall, preserving intent. "
+        "Return only the rewritten query.\n\n"
+        f"User question: {state['question']}"
+    )
+    state["query"] = llm.invoke(prompt).strip() or state["question"]
+    return state
+
+def retrieve(state: RAGState) -> RAGState:
+    state["docs"] = retriever.invoke(state["query"])
+    return state
+
+def grade(state: RAGState) -> RAGState:
+    # LLM-as-judge: do these snippets look sufficient?
+    snippets = "\n\n".join(d.page_content[:500] for d in state["docs"])
+    judgement = llm.invoke(
+        "Given the question and snippets, is there enough information to answer?\n"
+        "Reply ONLY YES or NO.\n\n"
+        f"Question: {state['question']}\n\nSnippets:\n{snippets}"
+    ).strip().upper()
+    state["needs_more"] = (judgement != "YES")
+    return state
+
+def generate(state: RAGState) -> RAGState:
+    context = "\n\n".join(f"[{i+1}] {d.metadata.get('source','?')}: {d.page_content}"
+                          for i, d in enumerate(state["docs"]))
+    prompt = (
+        "Use ONLY the context to answer. If unknown, say you don't know. "
+        "Cite sources with bracketed numbers like [1], [2].\n\n"
+        f"Question: {state['question']}\n\nContext:\n{context}\n\nAnswer:"
+    )
+    state["answer"] = llm.invoke(prompt)
+    return state
+
+def expand(state: RAGState) -> RAGState:
+    state["iter"] += 1
+    if state["iter"] >= 2:   # one retry max
+        state["needs_more"] = False  # break the loop and answer with best effort
+        return state
+    # Expand query with related keywords from current docs
+    kws = ", ".join({d.metadata.get("source", "") for d in state["docs"]})
+    prompt = (
+        "Expand the following query by adding relevant keywords/entities, "
+        "comma-separated, then return the final expanded query only.\n\n"
+        f"Original: {state['question']}\nSeen: {kws}"
+    )
+    state["query"] = llm.invoke(prompt).strip()
+    return state
+
+graph = StateGraph(RAGState)
+graph.add_node("rewrite", rewrite_query)
+graph.add_node("retrieve", retrieve)
+graph.add_node("grade", grade)
+graph.add_node("expand", expand)
+graph.add_node("generate", generate)
+
+graph.set_entry_point("rewrite")
+graph.add_edge("rewrite", "retrieve")
+graph.add_edge("retrieve", "grade")
+
+def route(state: RAGState):
+    return "expand" if state["needs_more"] else "generate"
+
+graph.add_conditional_edges("grade", route, {"expand": "expand", "generate": "generate"})
+graph.add_edge("expand", "retrieve")
+graph.add_edge("generate", END)
+
+app = graph.compile()
+
+initial = {"question": "What benefits are included in Manulife Vitality?",
+           "query": "", "docs": [], "answer": None, "needs_more": False, "iter": 0}
+
+result = app.invoke(initial)
+print(result["answer"])
