@@ -33,9 +33,10 @@ documents = [
 docs = [Document(page_content=t, metadata={"source": f"doc-{i}"}) for i, t in enumerate(documents)]
 
 # Create FAISS from docs (LangChain wraps FAISS for you)
-vectordb = FAISS.from_documents(docs, embedder,  # will compute embeddings
-                                docstore=InMemoryDocstore({}),
-                                index=None)       # LC will make a fresh IndexFlatL2
+# vectordb = FAISS.from_documents(docs, embedder,  # will compute embeddings
+#                                 docstore=InMemoryDocstore({}),
+#                                 index=None)       # LC will make a fresh IndexFlatL2
+vectordb = FAISS.from_documents(docs, embedder)
 
 retriever = vectordb.as_retriever(search_type="mmr", search_kwargs={"k": 4, "lambda_mult": 0.2})
 
