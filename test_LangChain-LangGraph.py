@@ -121,9 +121,11 @@ def generate(state: RAGState) -> RAGState:
     state["answer"] = llm.invoke(prompt)
     return state
 
+MAX_ITERS = 2
+
 def expand(state: RAGState) -> RAGState:
     state["iter"] += 1
-    if state["iter"] >= 2:   # one retry max
+    if state["iter"] >= MAX_ITERS:   # one retry max
         state["needs_more"] = False  # break the loop and answer with best effort
         return state
     # Expand query with related keywords from current docs
@@ -150,7 +152,16 @@ graph.add_edge("retrieve", "grade")
 def route(state: RAGState):
     return "expand" if state["needs_more"] else "generate"
 
-graph.add_conditional_edges("grade", route, {"expand": "expand", "generate": "generate"})
+# Instead of an unconditional edge, make expand conditional:
+def after_expand(state: RAGState):
+    return "retrieve" if state["iter"] < MAX_ITERS and state["needs_more"] else "generate"
+
+def route_after_grade(state: RAGState):
+    return "expand" if state.get("needs_more") else "generate"
+
+graph.add_conditional_edges("grade", route_after_grade, {
+    "expand": "expand", 
+    "generate": "generate"})
 graph.add_edge("expand", "retrieve")
 graph.add_edge("generate", END)
 
@@ -159,5 +170,6 @@ app = graph.compile()
 initial = {"question": "What benefits are included in Manulife Vitality?",
            "query": "", "docs": [], "answer": None, "needs_more": False, "iter": 0}
 
-result = app.invoke(initial)
+# result = app.invoke(initial)
+result = app.invoke(initial, config={"recursion_limit": 60})
 print(result["answer"])
